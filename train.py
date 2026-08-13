@@ -29,4 +29,3 @@ print(f"Model accuracy: {acc:.2f}")
 
 # Save model
 joblib.dump(model, "model/diabetes_model.pkl")
-print("Model saved to model/diabetes_model.pkl")
