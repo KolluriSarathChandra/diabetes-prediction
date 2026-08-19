@@ -4,109 +4,355 @@ import joblib
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
-import plotly.express as px
-from fpdf import FPDF
+import json
+import os
+import time
 from datetime import datetime
-import io
+from fpdf import FPDF
 
+# ============================================================
+# DATA / MODEL LOADING (real values only — nothing invented)
+# ============================================================
 model = joblib.load("model/diabetes_model.pkl")
 
-st.set_page_config(page_title="Diabetes Prediction System", page_icon="🩺", layout="wide")
+METRICS = None
+if os.path.exists("model/metrics.json"):
+    with open("model/metrics.json") as f:
+        METRICS = json.load(f)
 
-# ===== BACKGROUND ANIMATION =====
+st.set_page_config(page_title="Diabetes Risk Prediction", page_icon="🩺", layout="wide")
+
+# ============================================================
+# PREMIUM BACKGROUND: gradient + glow blobs + grid + neural net
+# injected directly into the parent document (bypasses Streamlit's
+# internal containers so position:fixed layers actually work)
+# ============================================================
 components.html("""
 <script>
 const doc = window.parent.document;
-if (!doc.getElementById('bg-anim-style')) {
+if (!doc.getElementById('premium-bg-style')) {
+
     const style = doc.createElement('style');
-    style.id = 'bg-anim-style';
+    style.id = 'premium-bg-style';
     style.innerHTML = `
+        :root {
+            --navy: #071A2B;
+            --blue: #2563EB;
+            --electric: #38BDF8;
+            --teal: #14B8A6;
+            --cyan: #67E8F9;
+            --white: #F8FAFC;
+            --dark: #0F172A;
+            --success: #22C55E;
+            --warning: #F59E0B;
+            --danger: #EF4444;
+        }
         [data-testid="stAppViewContainer"] {
-            background: linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #0f172a 100%) !important;
-            background-size: 400% 400% !important;
-            animation: gradientShift 12s ease infinite !important;
+            background:
+                radial-gradient(ellipse 900px 500px at 15% 10%, rgba(37,99,235,0.16), transparent 60%),
+                radial-gradient(ellipse 800px 600px at 85% 25%, rgba(20,184,166,0.14), transparent 60%),
+                radial-gradient(ellipse 700px 500px at 50% 90%, rgba(56,189,248,0.10), transparent 60%),
+                linear-gradient(160deg, #071A2B 0%, #0B2138 45%, #071A2B 100%) !important;
+            background-attachment: fixed !important;
         }
         [data-testid="stHeader"] { background: transparent !important; }
-        @keyframes gradientShift { 0%{background-position:0% 50%} 50%{background-position:100% 50%} 100%{background-position:0% 50%} }
-        .bg-particle { position: fixed; width:9px; height:9px; background:#ef4444; border-radius:50%;
-            box-shadow:0 0 14px 5px rgba(239,68,68,0.7); animation: floatUp linear infinite; opacity:0.85; z-index:0; pointer-events:none; }
-        @keyframes floatUp { 0%{transform:translateY(110vh) scale(0.6);opacity:0} 10%{opacity:0.85} 90%{opacity:0.85} 100%{transform:translateY(-10vh) scale(1.2);opacity:0} }
-        #ecg-container { position:fixed; top:0; left:0; width:100%; height:90px; z-index:0; overflow:hidden; opacity:0.6; pointer-events:none; }
-        #ecg-line { stroke:#22d3ee; stroke-width:2.5; fill:none; filter:drop-shadow(0 0 6px #22d3ee);
-            stroke-dasharray:1500; stroke-dashoffset:1500; animation: draw 4s linear infinite; }
-        @keyframes draw { 0%{stroke-dashoffset:1500} 100%{stroke-dashoffset:-1500} }
-        label, .stNumberInput label p, [data-testid="stWidgetLabel"] p { color:#f1f5f9 !important; font-weight:600 !important; text-shadow:0 1px 3px rgba(0,0,0,0.5); }
-        [data-testid="stVerticalBlockBorderWrapper"] { background-color: rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.15); border-radius:16px; padding:10px 6px; }
-        .stTabs [data-baseweb="tab"] { color: #e2e8f0; font-weight:600; }
-        iframe { display:none; }
+
+        /* subtle animated grid */
+        #premium-grid {
+            position: fixed; inset: 0; z-index: 0; pointer-events: none;
+            background-image:
+                linear-gradient(rgba(103,232,249,0.045) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(103,232,249,0.045) 1px, transparent 1px);
+            background-size: 46px 46px;
+            mask-image: radial-gradient(ellipse 80% 60% at 50% 20%, black, transparent 75%);
+        }
+
+        /* glowing blobs, slow float */
+        .glow-blob {
+            position: fixed; border-radius: 50%; filter: blur(70px);
+            z-index: 0; pointer-events: none; opacity: 0.5;
+            animation: floatBlob 18s ease-in-out infinite;
+        }
+        @keyframes floatBlob {
+            0%, 100% { transform: translate(0,0) scale(1); }
+            50% { transform: translate(30px,-25px) scale(1.08); }
+        }
+
+        /* neural network connective lines (hero) */
+        #neural-net { position: fixed; top: 0; left: 0; width: 100%; height: 340px; z-index: 0; opacity: 0.35; pointer-events:none; }
+        .nn-line { stroke: #38BDF8; stroke-width: 1; opacity: 0.35; }
+        .nn-node { fill: #67E8F9; filter: drop-shadow(0 0 4px #38BDF8); }
+        .nn-pulse { animation: nnPulse 3s ease-in-out infinite; }
+        @keyframes nnPulse { 0%,100% { opacity: 0.3; } 50% { opacity: 0.9; } }
+
+        /* Streamlit widget label visibility on dark bg */
+        label, .stNumberInput label p, [data-testid="stWidgetLabel"] p {
+            color: #F1F5F9 !important; font-weight: 600 !important;
+        }
+
+        [data-testid="stVerticalBlockBorderWrapper"] {
+            background: rgba(255,255,255,0.045);
+            border: 1px solid rgba(103,232,249,0.14);
+            border-radius: 20px;
+            backdrop-filter: blur(14px);
+            -webkit-backdrop-filter: blur(14px);
+            padding: 8px 4px;
+        }
+
+        /* Tabs styled as premium nav */
+        .stTabs [data-baseweb="tab-list"] { gap: 6px; }
+        .stTabs [data-baseweb="tab"] {
+            color: #94A3B8; font-weight: 600; font-size: 14.5px;
+            padding: 10px 18px; border-radius: 10px 10px 0 0;
+        }
+        .stTabs [aria-selected="true"] {
+            color: #67E8F9 !important;
+            border-bottom: 2px solid #38BDF8 !important;
+        }
+
+        iframe { display: none; }
     `;
     doc.head.appendChild(style);
-    const positions = [10,22,35,50,65,78,88];
-    positions.forEach((left, i) => {
-        const p = doc.createElement('div');
-        p.className = 'bg-particle';
-        p.style.left = left + '%';
-        p.style.animationDuration = (8 + i*0.7) + 's';
-        p.style.animationDelay = (i*0.5) + 's';
-        doc.body.appendChild(p);
+
+    const grid = doc.createElement('div');
+    grid.id = 'premium-grid';
+    doc.body.appendChild(grid);
+
+    const blobConfigs = [
+        {top:'5%', left:'8%', size:'380px', color:'#2563EB', delay:'0s'},
+        {top:'15%', left:'70%', size:'420px', color:'#14B8A6', delay:'4s'},
+        {top:'55%', left:'40%', size:'320px', color:'#38BDF8', delay:'8s'},
+    ];
+    blobConfigs.forEach(b => {
+        const el = doc.createElement('div');
+        el.className = 'glow-blob';
+        el.style.top = b.top; el.style.left = b.left;
+        el.style.width = b.size; el.style.height = b.size;
+        el.style.background = b.color;
+        el.style.animationDelay = b.delay;
+        doc.body.appendChild(el);
     });
-    const ecgWrap = doc.createElement('div');
-    ecgWrap.id = 'ecg-container';
-    ecgWrap.innerHTML = `<svg width="100%" height="90" viewBox="0 0 1500 90" preserveAspectRatio="none">
-        <path id="ecg-line" d="M0,45 L100,45 L120,45 L135,10 L150,80 L165,45 L200,45 L400,45 L420,45 L435,10 L450,80 L465,45 L500,45
-        L700,45 L720,45 L735,10 L750,80 L765,45 L800,45 L1000,45 L1020,45 L1035,10 L1050,80 L1065,45 L1100,45
-        L1300,45 L1320,45 L1335,10 L1350,80 L1365,45 L1500,45"/></svg>`;
-    doc.body.appendChild(ecgWrap);
+
+    // Neural network graphic (hero background)
+    const nn = doc.createElement('div');
+    nn.id = 'neural-net';
+    const nodes = [
+        [120,60],[120,160],[120,260],
+        [420,40],[420,120],[420,200],[420,280],
+        [720,80],[720,180],[720,270],
+        [1020,60],[1020,160],[1020,260],
+        [1300,100],[1300,220]
+    ];
+    let lines = '';
+    const layers = [[0,1,2],[3,4,5,6],[7,8,9],[10,11,12],[13,14]];
+    for (let l = 0; l < layers.length - 1; l++) {
+        layers[l].forEach(a => {
+            layers[l+1].forEach(b => {
+                lines += `<line class="nn-line" x1="${nodes[a][0]}" y1="${nodes[a][1]}" x2="${nodes[b][0]}" y2="${nodes[b][1]}"/>`;
+            });
+        });
+    }
+    let circles = '';
+    nodes.forEach((n, i) => {
+        circles += `<circle class="nn-node nn-pulse" cx="${n[0]}" cy="${n[1]}" r="4" style="animation-delay:${(i%5)*0.4}s"/>`;
+    });
+    nn.innerHTML = `<svg width="100%" height="340" viewBox="0 0 1400 340" preserveAspectRatio="xMidYMid slice">${lines}${circles}</svg>`;
+    doc.body.appendChild(nn);
 }
 </script>
 """, height=0, width=0)
 
-# ===== STYLING =====
+# ============================================================
+# GLOBAL CSS (cards, buttons, typography, results)
+# ============================================================
 st.markdown("""
 <style>
-.title-text { font-size:44px; font-weight:800; color:#f8fafc; text-align:center; margin-bottom:4px; text-shadow:0 0 20px rgba(34,211,238,0.5); }
-.subtitle-text { font-size:16px; color:#e2e8f0; text-align:center; margin-bottom:20px; }
-.stButton>button { background: linear-gradient(90deg, #2563eb, #22d3ee); color:white; font-weight:700; border-radius:10px;
-    padding:12px 24px; border:none; width:100%; font-size:16px; }
-.result-box-positive { background-color:rgba(254,242,242,0.98); border-left:6px solid #dc2626; padding:22px 26px; border-radius:12px; box-shadow:0 8px 20px rgba(0,0,0,0.3); margin-top:20px; }
-.result-box-negative { background-color:rgba(240,253,244,0.98); border-left:6px solid #16a34a; padding:22px 26px; border-radius:12px; box-shadow:0 8px 20px rgba(0,0,0,0.3); margin-top:20px; }
-.result-box-positive h3, .result-box-negative h3 { color:#1f2937; font-size:22px; }
-.result-box-positive p, .result-box-negative p { color:#374151; font-size:15px; line-height:1.5; }
-.tips-card { background-color:rgba(255,255,255,0.98); border-radius:14px; padding:22px 28px; margin-top:16px; box-shadow:0 8px 20px rgba(0,0,0,0.3); }
-.tips-title { font-size:20px; font-weight:800; color:#1f2937; margin-bottom:12px; }
-.tip-item { padding:8px 0; font-size:15px; line-height:1.5; color:#1f2937; border-bottom:1px solid #f1f5f9; }
-.tip-item:last-child { border-bottom:none; }
-.consult-card { background-color:rgba(255,255,255,0.98); border-radius:14px; padding:22px 28px; margin-top:16px; box-shadow:0 8px 20px rgba(0,0,0,0.3); }
-.disclaimer-box { background-color:rgba(255,255,255,0.9); border-radius:10px; padding:14px 20px; margin-top:22px; font-size:13px; color:#4b5563; text-align:center; }
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&display=swap');
+html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
+
+.hero-wrap { position: relative; z-index: 2; text-align: center; padding: 38px 10px 18px 10px; }
+.hero-eyebrow {
+    display:inline-block; color:#67E8F9; background: rgba(56,189,248,0.10);
+    border: 1px solid rgba(56,189,248,0.3); padding: 5px 16px; border-radius: 999px;
+    font-size: 12.5px; font-weight:700; letter-spacing: 1.5px; text-transform: uppercase; margin-bottom: 18px;
+}
+.hero-title {
+    font-size: 52px; font-weight: 900; color: #F8FAFC; margin: 0 0 10px 0; line-height: 1.1;
+    background: linear-gradient(90deg, #F8FAFC 30%, #67E8F9 100%);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+}
+.hero-subtitle { font-size: 18px; color: #38BDF8; font-weight: 600; margin-bottom: 10px; }
+.hero-desc { font-size: 15px; color: #94A3B8; max-width: 620px; margin: 0 auto; line-height: 1.6; }
+
+.glass-card {
+    background: rgba(255,255,255,0.045);
+    border: 1px solid rgba(103,232,249,0.14);
+    border-radius: 20px;
+    backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+    padding: 26px 30px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.35);
+    margin-bottom: 20px;
+    transition: transform 0.25s ease, box-shadow 0.25s ease, border-color 0.25s ease;
+}
+.glass-card:hover {
+    transform: translateY(-3px);
+    border-color: rgba(103,232,249,0.35);
+    box-shadow: 0 14px 40px rgba(0,0,0,0.45);
+}
+.glass-card-light {
+    background: rgba(248,250,252,0.97);
+    border-radius: 18px; padding: 24px 28px; margin-top: 16px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+}
+
+.section-title { color: #F8FAFC; font-size: 24px; font-weight: 800; margin-bottom: 4px; }
+.section-sub { color: #94A3B8; font-size: 14px; margin-bottom: 22px; }
+
+.step-num {
+    font-size: 34px; font-weight: 900; color: transparent;
+    -webkit-text-stroke: 1.4px #38BDF8; margin-bottom: 6px;
+}
+.step-title { color: #67E8F9; font-weight: 800; font-size: 15px; letter-spacing: 1px; margin-bottom: 6px; }
+.step-desc { color: #CBD5E1; font-size: 14px; line-height: 1.5; }
+
+.stat-value { font-size: 34px; font-weight: 900; color: #F8FAFC; margin: 2px 0; }
+.stat-label { color: #94A3B8; font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+.stat-icon { font-size: 22px; margin-bottom: 6px; }
+
+div.stButton > button {
+    background: linear-gradient(90deg, #2563EB 0%, #38BDF8 100%);
+    color: white; font-weight: 700; font-size: 16px;
+    border: none; border-radius: 12px; padding: 14px 28px; width: 100%;
+    box-shadow: 0 6px 20px rgba(37,99,235,0.4);
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+div.stButton > button:hover {
+    transform: translateY(-2px) scale(1.01);
+    box-shadow: 0 10px 28px rgba(56,189,248,0.5);
+}
+div.stButton > button:active { transform: translateY(0) scale(0.99); }
+
+.result-positive {
+    background: linear-gradient(135deg, rgba(239,68,68,0.12), rgba(248,250,252,0.98));
+    border-left: 5px solid #EF4444; border-radius: 16px; padding: 26px 30px; margin-top: 18px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+}
+.result-moderate {
+    background: linear-gradient(135deg, rgba(245,158,11,0.12), rgba(248,250,252,0.98));
+    border-left: 5px solid #F59E0B; border-radius: 16px; padding: 26px 30px; margin-top: 18px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+}
+.result-negative {
+    background: linear-gradient(135deg, rgba(34,197,94,0.12), rgba(248,250,252,0.98));
+    border-left: 5px solid #22C55E; border-radius: 16px; padding: 26px 30px; margin-top: 18px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+}
+.result-heading { font-size: 22px; font-weight: 800; color: #0F172A; margin-bottom: 6px; }
+.result-text { font-size: 15px; color: #334155; line-height: 1.6; }
+
+.tip-item { padding: 9px 0; font-size: 14.5px; line-height: 1.5; color: #1F2937; border-bottom: 1px solid #E2E8F0; }
+.tip-item:last-child { border-bottom: none; }
+
+.footer-wrap {
+    text-align: center; padding: 34px 10px 20px 10px; margin-top: 30px;
+    border-top: 1px solid rgba(103,232,249,0.12);
+}
+.footer-title { color: #F8FAFC; font-weight: 800; font-size: 16px; }
+.footer-sub { color: #64748B; font-size: 12.5px; margin: 6px 0 14px 0; }
+.disclaimer-box {
+    background: rgba(255,255,255,0.05); border: 1px solid rgba(245,158,11,0.25);
+    border-radius: 10px; padding: 12px 20px; font-size: 12.5px; color: #CBD5E1; max-width: 700px; margin: 0 auto;
+}
 </style>
 """, unsafe_allow_html=True)
 
-# ===== SESSION STATE FOR HISTORY =====
+# ============================================================
+# SESSION STATE
+# ============================================================
 if "history" not in st.session_state:
     st.session_state.history = []
 
-# ===== HEADER =====
-st.markdown('<p class="title-text">🩺 Diabetes Prediction System</p>', unsafe_allow_html=True)
-st.markdown('<p class="subtitle-text">AI-powered risk assessment with personalized guidance</p>', unsafe_allow_html=True)
+def risk_tier(prob):
+    if prob < 0.40:
+        return "LOW RISK", "#22C55E", "result-negative"
+    elif prob < 0.70:
+        return "MODERATE RISK", "#F59E0B", "result-moderate"
+    else:
+        return "HIGH RISK", "#EF4444", "result-positive"
 
-tab_home, tab_predict, tab_history, tab_about = st.tabs(["🏠 Home", "🔍 Predict", "📊 History", "ℹ️ About"])
+# ============================================================
+# NAVIGATION
+# ============================================================
+tab_home, tab_predict, tab_insights, tab_history, tab_about = st.tabs(
+    ["🏠  Home", "🔍  Predict", "📊  Insights", "🕓  History", "ℹ️  About"]
+)
 
-# ===== HOME TAB =====
+# ============================================================
+# HOME TAB — hero + how it works + stat cards
+# ============================================================
 with tab_home:
     st.markdown("""
-        <div class="tips-card">
-            <div class="tips-title">Welcome</div>
-            <p style="color:#374151; font-size:15px; line-height:1.6;">
-            This tool uses a machine learning model trained on patient health data to estimate diabetes risk.
-            Go to the <b>Predict</b> tab to enter patient details and get a risk assessment, personalized
-            lifestyle guidance, and the option to request a doctor consultation. Your session's past predictions
-            are saved in the <b>History</b> tab.
-            </p>
+        <div class="hero-wrap">
+            <div class="hero-eyebrow">AI · Machine Learning · Healthcare</div>
+            <div class="hero-title">Diabetes Risk Prediction</div>
+            <div class="hero-subtitle">Intelligent diabetes risk assessment powered by machine learning.</div>
+            <div class="hero-desc">
+                Enter a patient's clinical indicators and receive an instant, model-driven risk
+                assessment — backed by a trained Random Forest classifier, validated with
+                cross-validation, and presented with transparent, real performance metrics.
+            </div>
         </div>
     """, unsafe_allow_html=True)
 
-# ===== PREDICT TAB =====
+    st.markdown('<div style="height:10px"></div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-title" style="text-align:center;">How It Works</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-sub" style="text-align:center;">Three simple steps from data to insight</div>', unsafe_allow_html=True)
+
+    c1, c2, c3 = st.columns(3)
+    steps = [
+        ("01", "ENTER DATA", "Provide relevant health indicators such as glucose, BMI, blood pressure, and age."),
+        ("02", "AI ANALYSIS", "A trained Random Forest model, validated with 5-fold cross-validation, analyzes the input."),
+        ("03", "RISK ASSESSMENT", "Receive an instant, transparent estimate of diabetes risk with personalized guidance."),
+    ]
+    for col, (num, title, desc) in zip([c1, c2, c3], steps):
+        with col:
+            st.markdown(f"""
+                <div class="glass-card">
+                    <div class="step-num">{num}</div>
+                    <div class="step-title">{title}</div>
+                    <div class="step-desc">{desc}</div>
+                </div>
+            """, unsafe_allow_html=True)
+
+    if METRICS:
+        st.markdown('<div style="height:6px"></div>', unsafe_allow_html=True)
+        st.markdown('<div class="section-title" style="text-align:center;">Model Performance</div>', unsafe_allow_html=True)
+        st.markdown('<div class="section-sub" style="text-align:center;">Real metrics from held-out test data — nothing simulated</div>', unsafe_allow_html=True)
+
+        s1, s2, s3, s4 = st.columns(4)
+        stats = [
+            ("🎯", "Accuracy", f"{METRICS['accuracy']*100:.1f}%"),
+            ("📐", "Precision", f"{METRICS['precision']*100:.1f}%"),
+            ("🔁", "Recall", f"{METRICS['recall']*100:.1f}%"),
+            ("⚖️", "F1 Score", f"{METRICS['f1_score']*100:.1f}%"),
+        ]
+        for col, (icon, label, val) in zip([s1, s2, s3, s4], stats):
+            with col:
+                st.markdown(f"""
+                    <div class="glass-card" style="text-align:center;">
+                        <div class="stat-icon">{icon}</div>
+                        <div class="stat-value">{val}</div>
+                        <div class="stat-label">{label}</div>
+                    </div>
+                """, unsafe_allow_html=True)
+
+# ============================================================
+# PREDICT TAB
+# ============================================================
 with tab_predict:
+    st.markdown('<div class="section-title">Patient Health Indicators</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-sub">All fields are used directly by the trained model</div>', unsafe_allow_html=True)
+
     with st.container(border=True):
         col1, col2 = st.columns(2)
         with col1:
@@ -120,66 +366,66 @@ with tab_predict:
             bmi = st.number_input("BMI", min_value=0.0, max_value=70.0, value=25.0)
             age = st.number_input("Age", min_value=1, max_value=120, value=30)
 
-        predict_clicked = st.button("🔍 Predict")
+        predict_clicked = st.button("✨  CALCULATE DIABETES RISK")
 
     if predict_clicked:
+        status = st.empty()
+        for msg in ["🔎 Analyzing health indicators...", "⚙️ Processing clinical features...", "📈 Generating risk assessment..."]:
+            status.markdown(f'<div class="glass-card" style="text-align:center; color:#67E8F9; font-weight:600;">{msg}</div>', unsafe_allow_html=True)
+            time.sleep(0.5)
+        status.empty()
+
         input_data = np.array([[pregnancies, glucose, blood_pressure, skin_thickness, insulin, bmi, dpf, age]])
         prediction = model.predict(input_data)[0]
-        probability = model.predict_proba(input_data)[0][1]  # probability of class 1 (diabetic)
+        probability = model.predict_proba(input_data)[0][1]  # real, model-derived probability
 
-        # Save to history
+        tier_label, tier_color, tier_class = risk_tier(probability)
+
         st.session_state.history.append({
             "Time": datetime.now().strftime("%H:%M:%S"),
             "Glucose": glucose, "BMI": bmi, "Age": age,
             "Risk %": round(probability * 100, 1),
-            "Result": "Diabetic" if prediction == 1 else "Not Diabetic"
+            "Tier": tier_label
         })
 
         colA, colB = st.columns([1, 1])
-
         with colA:
             gauge = go.Figure(go.Indicator(
                 mode="gauge+number",
-                value=probability * 100,
-                title={'text': "Diabetes Risk %", 'font': {'color': 'white'}},
-                number={'font': {'color': 'white'}, 'suffix': "%"},
+                value=round(probability * 100, 1),
+                number={'suffix': "%", 'font': {'color': '#F8FAFC', 'size': 44}},
                 gauge={
-                    'axis': {'range': [0, 100], 'tickcolor': 'white'},
-                    'bar': {'color': "#ef4444" if probability > 0.5 else "#16a34a"},
+                    'axis': {'range': [0, 100], 'tickcolor': '#94A3B8', 'tickfont': {'color': '#94A3B8'}},
+                    'bar': {'color': tier_color, 'thickness': 0.28},
+                    'bgcolor': 'rgba(255,255,255,0.03)',
+                    'borderwidth': 0,
                     'steps': [
-                        {'range': [0, 40], 'color': "#166534"},
-                        {'range': [40, 70], 'color': "#ca8a04"},
-                        {'range': [70, 100], 'color': "#7f1d1d"},
+                        {'range': [0, 40], 'color': 'rgba(34,197,94,0.18)'},
+                        {'range': [40, 70], 'color': 'rgba(245,158,11,0.18)'},
+                        {'range': [70, 100], 'color': 'rgba(239,68,68,0.18)'},
                     ],
                 }
             ))
-            gauge.update_layout(paper_bgcolor="rgba(0,0,0,0)", height=280, margin=dict(t=40, b=10))
+            gauge.update_layout(paper_bgcolor="rgba(0,0,0,0)", height=280, margin=dict(t=30, b=10, l=20, r=20))
             st.plotly_chart(gauge, use_container_width=True)
 
         with colB:
-            ref_df = pd.DataFrame({
-                "Metric": ["Glucose", "BMI", "Blood Pressure", "Age"],
-                "Patient Value": [glucose, bmi, blood_pressure, age],
-                "Healthy Reference": [100, 22, 80, 35]
-            })
-            fig = px.bar(ref_df, x="Metric", y=["Patient Value", "Healthy Reference"], barmode="group",
-                         color_discrete_sequence=["#ef4444", "#22d3ee"])
-            fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                               font=dict(color="white"), height=280, legend=dict(font=dict(color="white")))
-            st.plotly_chart(fig, use_container_width=True)
-
-        if prediction == 1:
             st.markdown(f"""
-                <div class="result-box-positive">
-                    <h3>⚠️ Result: Likely Diabetic ({probability*100:.1f}% risk)</h3>
-                    <p>Based on the entered values, the model predicts a higher risk of diabetes.
-                    This is not a medical diagnosis — please consult a doctor for proper testing and advice.</p>
+                <div class="{tier_class}">
+                    <div class="result-heading">DIABETES RISK ASSESSMENT</div>
+                    <div style="font-size:48px; font-weight:900; color:{tier_color}; margin: 4px 0;">{probability*100:.1f}%</div>
+                    <div style="font-size:18px; font-weight:800; color:{tier_color}; letter-spacing:1px; margin-bottom:10px;">{tier_label}</div>
+                    <div class="result-text">
+                        {"Based on the entered values, the model predicts a higher likelihood of diabetes. This is not a medical diagnosis — please consult a doctor for proper testing." if prediction == 1 else "Based on the entered values, the model predicts a lower likelihood of diabetes. Keep up healthy habits to maintain this."}
+                    </div>
                 </div>
             """, unsafe_allow_html=True)
 
+        # Guidance
+        if prediction == 1:
             st.markdown("""
-                <div class="tips-card">
-                    <div class="tips-title">💡 General Lifestyle Guidance</div>
+                <div class="glass-card-light">
+                    <div style="font-size:19px; font-weight:800; color:#0F172A; margin-bottom:12px;">💡 General Lifestyle Guidance</div>
                     <div class="tip-item">🥗 <b>Diet:</b> Reduce refined sugar and processed carbs. Favor whole grains, vegetables, and lean protein.</div>
                     <div class="tip-item">🏃 <b>Exercise:</b> Aim for at least 30 minutes of moderate activity most days of the week.</div>
                     <div class="tip-item">⚖️ <b>Weight:</b> Gradual weight loss, if overweight, can meaningfully improve blood sugar control.</div>
@@ -191,12 +437,11 @@ with tab_predict:
 
             urgency = "within the next 1–2 weeks" if probability > 0.7 else "at your next convenient opportunity"
             st.markdown(f"""
-                <div class="consult-card">
-                    <div class="tips-title">👩‍⚕️ Talk to a Doctor</div>
-                    <p style="color:#374151; font-size:15px;">Based on this risk level, we'd suggest booking a check-up
-                    <b>{urgency}</b>. A doctor can order an HbA1c/fasting glucose test to confirm your actual status
-                    and, if needed, prescribe appropriate treatment — medication decisions should always come from a
-                    licensed physician, not an app.</p>
+                <div class="glass-card-light">
+                    <div style="font-size:19px; font-weight:800; color:#0F172A; margin-bottom:10px;">👩‍⚕️ Talk to a Doctor</div>
+                    <div class="result-text">Based on this risk level, consider booking a check-up <b>{urgency}</b>.
+                    A doctor can order an HbA1c or fasting glucose test to confirm your actual status and determine
+                    appropriate treatment — medication decisions should always come from a licensed physician, not an app.</div>
                 </div>
             """, unsafe_allow_html=True)
 
@@ -207,19 +452,11 @@ with tab_predict:
                     notes = st.text_area("Notes for the doctor (optional)")
                     submitted = st.form_submit_button("Request Consultation")
                     if submitted:
-                        st.success(f"Request received, {name or 'patient'}! A doctor will reach out during your preferred time slot: {preferred_time}. (This is a demo — no real appointment was booked.)")
-
+                        st.success(f"Request received, {name or 'patient'}! A doctor will reach out during your preferred slot: {preferred_time}. (Demo only — no real appointment booked.)")
         else:
-            st.markdown(f"""
-                <div class="result-box-negative">
-                    <h3>✅ Result: Likely Not Diabetic ({probability*100:.1f}% risk)</h3>
-                    <p>Based on the entered values, the model predicts a lower risk of diabetes. Keep up healthy habits to maintain this.</p>
-                </div>
-            """, unsafe_allow_html=True)
-
             st.markdown("""
-                <div class="tips-card">
-                    <div class="tips-title">💡 Tips to Stay Healthy</div>
+                <div class="glass-card-light">
+                    <div style="font-size:19px; font-weight:800; color:#0F172A; margin-bottom:12px;">💡 Tips to Stay Healthy</div>
                     <div class="tip-item">🥗 <b>Diet:</b> Maintain a balanced diet rich in fiber, vegetables, and whole grains.</div>
                     <div class="tip-item">🏃 <b>Exercise:</b> Stay active with regular physical activity.</div>
                     <div class="tip-item">🩸 <b>Check-ups:</b> Get periodic health screenings, especially if diabetes runs in your family.</div>
@@ -227,7 +464,7 @@ with tab_predict:
                 </div>
             """, unsafe_allow_html=True)
 
-        # PDF Report
+        # PDF report
         def generate_pdf():
             pdf = FPDF()
             pdf.add_page()
@@ -235,58 +472,116 @@ with tab_predict:
             pdf.cell(0, 10, "Diabetes Risk Assessment Report", ln=True)
             pdf.set_font("Helvetica", "", 11)
             pdf.cell(0, 8, f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}", ln=True)
-            pdf.ln(5)
+            pdf.ln(4)
             pdf.set_font("Helvetica", "B", 12)
-            pdf.cell(0, 8, f"Result: {'Likely Diabetic' if prediction == 1 else 'Likely Not Diabetic'}", ln=True)
-            pdf.cell(0, 8, f"Risk Probability: {probability*100:.1f}%", ln=True)
-            pdf.ln(5)
+            pdf.cell(0, 8, f"Result: {tier_label} ({probability*100:.1f}% probability)", ln=True)
+            pdf.ln(4)
             pdf.set_font("Helvetica", "", 11)
-            fields = [("Pregnancies", pregnancies), ("Glucose", glucose), ("Blood Pressure", blood_pressure),
-                      ("Skin Thickness", skin_thickness), ("Insulin", insulin), ("BMI", bmi),
-                      ("Diabetes Pedigree Function", dpf), ("Age", age)]
-            for label, val in fields:
+            for label, val in [("Pregnancies", pregnancies), ("Glucose", glucose), ("Blood Pressure", blood_pressure),
+                                ("Skin Thickness", skin_thickness), ("Insulin", insulin), ("BMI", bmi),
+                                ("Diabetes Pedigree Function", dpf), ("Age", age)]:
                 pdf.cell(0, 7, f"{label}: {val}", ln=True)
-            pdf.ln(5)
+            pdf.ln(4)
             pdf.set_font("Helvetica", "I", 9)
             pdf.multi_cell(0, 6, "Disclaimer: This is a statistical prediction from a machine learning model, not a medical diagnosis. Consult a licensed physician for medical advice.")
             return bytes(pdf.output())
 
-        pdf_bytes = generate_pdf()
-        st.download_button("📄 Download PDF Report", data=pdf_bytes,
+        st.download_button("📄 Download PDF Report", data=generate_pdf(),
                             file_name="diabetes_risk_report.pdf", mime="application/pdf")
 
-# ===== HISTORY TAB =====
+# ============================================================
+# INSIGHTS TAB — feature importance + confusion matrix (real data)
+# ============================================================
+with tab_insights:
+    st.markdown('<div class="section-title">Model Insights</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-sub">Transparency into how the model makes decisions — real values from training</div>', unsafe_allow_html=True)
+
+    if METRICS:
+        fi_df = pd.DataFrame({
+            "Feature": METRICS["feature_names"],
+            "Importance": METRICS["feature_importance"]
+        }).sort_values("Importance", ascending=True)
+
+        fig = go.Figure(go.Bar(
+            x=fi_df["Importance"], y=fi_df["Feature"], orientation='h',
+            marker=dict(
+                color=fi_df["Importance"],
+                colorscale=[[0, "#14B8A6"], [0.5, "#2563EB"], [1, "#38BDF8"]],
+            )
+        ))
+        fig.update_layout(
+            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+            font=dict(color="#E2E8F0"), height=380,
+            margin=dict(t=20, b=20, l=10, r=20),
+            xaxis=dict(gridcolor="rgba(255,255,255,0.06)"),
+        )
+        st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+        st.markdown('<b style="color:#F8FAFC;">Feature Importance</b>', unsafe_allow_html=True)
+        st.plotly_chart(fig, use_container_width=True)
+        st.caption("Reflects how much each feature influenced the model's decisions — not a claim of medical causation.")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        cm = METRICS["confusion_matrix"]
+        cm_fig = go.Figure(data=go.Heatmap(
+            z=cm, x=["Predicted: No", "Predicted: Yes"], y=["Actual: No", "Actual: Yes"],
+            colorscale=[[0, "#0B2138"], [1, "#38BDF8"]], showscale=False,
+            text=cm, texttemplate="%{text}", textfont={"color": "#F8FAFC", "size": 18}
+        ))
+        cm_fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                              font=dict(color="#E2E8F0"), height=320, margin=dict(t=20, b=20, l=10, r=20))
+        st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+        st.markdown('<b style="color:#F8FAFC;">Confusion Matrix (Test Set)</b>', unsafe_allow_html=True)
+        st.plotly_chart(cm_fig, use_container_width=True)
+        st.caption(f"Evaluated on {METRICS['test_set_size']} held-out test samples, trained on {METRICS['train_set_size']}.")
+        st.markdown('</div>', unsafe_allow_html=True)
+    else:
+        st.info("Run train.py to generate model/metrics.json — insights will appear here automatically.")
+
+# ============================================================
+# HISTORY TAB
+# ============================================================
 with tab_history:
+    st.markdown('<div class="section-title">Prediction History</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-sub">This session only</div>', unsafe_allow_html=True)
     if st.session_state.history:
-        hist_df = pd.DataFrame(st.session_state.history)
-        st.markdown('<div class="tips-card"><div class="tips-title">📊 Prediction History (this session)</div></div>', unsafe_allow_html=True)
-        st.dataframe(hist_df, use_container_width=True)
+        st.dataframe(pd.DataFrame(st.session_state.history), use_container_width=True)
         if st.button("Clear History"):
             st.session_state.history = []
             st.rerun()
     else:
-        st.markdown('<div class="tips-card"><p style="color:#374151;">No predictions yet this session. Go to the Predict tab to get started.</p></div>', unsafe_allow_html=True)
+        st.markdown('<div class="glass-card">No predictions yet this session.</div>', unsafe_allow_html=True)
 
-# ===== ABOUT TAB =====
+# ============================================================
+# ABOUT TAB
+# ============================================================
 with tab_about:
-    st.markdown("""
-        <div class="tips-card">
-            <div class="tips-title">About This Project</div>
-            <p style="color:#374151; font-size:15px; line-height:1.6;">
+    st.markdown('<div class="section-title">About This Project</div>', unsafe_allow_html=True)
+    st.markdown(f"""
+        <div class="glass-card">
+            <div class="result-text" style="color:#CBD5E1;">
             Built as an end-to-end MLOps pipeline: a Random Forest classifier trained on the PIMA Indians
             Diabetes dataset, version-controlled on GitHub with an automated CI pipeline (GitHub Actions)
             that retrains and validates the model on every push, and deployed via Streamlit Community Cloud.
-            </p>
-            <p style="color:#374151; font-size:15px; line-height:1.6;">
-            <b>Note on accuracy:</b> This model achieves realistic real-world accuracy for this dataset
-            (roughly 78–83%). Claims of near-100% accuracy on a dataset like this typically indicate
-            data leakage or overfitting rather than genuine predictive power.
-            </p>
+            </div>
+            <div class="result-text" style="color:#CBD5E1; margin-top:10px;">
+            <b style="color:#67E8F9;">On accuracy:</b> All performance numbers shown in this app are real,
+            computed on a held-out test set — {f"currently {METRICS['accuracy']*100:.1f}% test accuracy" if METRICS else "see model/metrics.json"}.
+            Claims of near-100% accuracy on a dataset like this typically indicate data leakage or
+            overfitting rather than genuine predictive power.
+            </div>
         </div>
     """, unsafe_allow_html=True)
 
+# ============================================================
+# FOOTER
+# ============================================================
 st.markdown("""
-    <div class="disclaimer-box">
-        ⚠️ This tool provides a statistical prediction based on a machine learning model and is not a substitute for professional medical advice, diagnosis, or treatment.
+    <div class="footer-wrap">
+        <div class="footer-title">Diabetes Risk Prediction</div>
+        <div class="footer-sub">Machine Learning · Healthcare Analytics · Streamlit</div>
+        <div class="disclaimer-box">
+            ⚠️ This tool provides a statistical prediction based on a machine learning model and is not a
+            substitute for professional medical advice, diagnosis, or treatment.
+        </div>
     </div>
 """, unsafe_allow_html=True)
